@@ -1,46 +1,110 @@
 import pandas as pd
 
 from pathlib import Path
+from pyomo.environ import *
 
 p = Path(__file__)
 
 DATA = p.resolve().parents[1] / "data" / "OrangeJuiceBlending.xlsx"
 
-print(f"Loading data from {DATA}")
-
 df = pd.read_excel(DATA, sheet_name="Optimization Model (Limit 4)", header=None)
 
-demand_row = df.index[df.iloc[:, 0] == "Total Required"][0]
-demand = {
-    "January": df.iloc[demand_row, 2],
-    "February": df.iloc[demand_row, 3],
-    "March": df.iloc[demand_row, 4],
-}
+def load_supplier_data(df):
+    # Find the row where the supplier data starts
+    supplier_headers = df.index[df.iloc[:, 0] == "Varietal"][0]
+    supplier_bottom = df.index[df.iloc[:, 0] == "Monthly Cost Totals:"][0]
+    suppliers_df = df.iloc[supplier_headers + 1 : supplier_bottom, 0:13]
+    suppliers_cols = df.iloc[supplier_headers, 0:13].tolist()
+    
+    return suppliers_df
 
-Valencia_row = df.index[df.iloc[:, 0] == "Valencia Required"][0]
-Valencia_req = {
-    "January": df.iloc[Valencia_row, 2],
-    "February": df.iloc[Valencia_row, 3],
-    "March": df.iloc[Valencia_row, 4],
-}
+def load_demand_and_quality_constraints(df):
+    demand_row = df.index[df.iloc[:, 0] == "Total Required"][0]
+    demand = {
+        "January": df.iloc[demand_row, 2],
+        "February": df.iloc[demand_row, 3],
+        "March": df.iloc[demand_row, 4],
+    }
 
-print(df.iloc[25:35, 0:5])
+    Valencia_row = df.index[df.iloc[:, 0] == "Valencia Required"][0]
+    Valencia_req = {
+        "January": df.iloc[Valencia_row, 2],
+        "February": df.iloc[Valencia_row, 3],
+        "March": df.iloc[Valencia_row, 4],
+    }
 
-# Quality constraints
-qc_row = df.index[df.iloc[:, 0] == "Quality Constraints"][0]
-BAR_min = df.iloc[qc_row + 1, 1]
-BAR_max = df.iloc[qc_row + 1, 5]
-ACID_min = df.iloc[qc_row + 2, 1]
-ACID_max = df.iloc[qc_row + 2, 5]   
-ASTRINGENCY_min = df.iloc[qc_row + 3, 1]
-ASTRINGENCY_max = df.iloc[qc_row + 3, 5]
-COLOR_min = df.iloc[qc_row + 4, 1]
-COLOR_max = df.iloc[qc_row + 4, 5]
+    # Quality constraints
+    qc_row = df.index[df.iloc[:, 0] == "Quality Constraints"][0]
+    BAR_min = df.iloc[qc_row + 1, 1]
+    BAR_max = df.iloc[qc_row + 1, 5]
+    ACID_min = df.iloc[qc_row + 2, 1]
+    ACID_max = df.iloc[qc_row + 2, 5]   
+    ASTRINGENCY_min = df.iloc[qc_row + 3, 1]
+    ASTRINGENCY_max = df.iloc[qc_row + 3, 5]
+    COLOR_min = df.iloc[qc_row + 4, 1]
+    COLOR_max = df.iloc[qc_row + 4, 5]
 
-quality = {
-    "BAR": (BAR_min, BAR_max),
-    "ACID": (ACID_min, ACID_max),
-    "ASTRINGENCY": (ASTRINGENCY_min, ASTRINGENCY_max),
-    "COLOR": (COLOR_min, COLOR_max),
-}   
+    quality = {
+        "BAR": (BAR_min, BAR_max),
+        "ACID": (ACID_min, ACID_max),
+        "ASTRINGENCY": (ASTRINGENCY_min, ASTRINGENCY_max),
+        "COLOR": (COLOR_min, COLOR_max),
+    }   
+    return demand, Valencia_req, quality
 
+def build_basic_model(suppliers_df, demand, Valencia_req, quality):
+    model = ConcreteModel()
+
+    # Define sets
+    model.SUPPLIERS = Set(initialize=suppliers_df.index.tolist())
+    model.MONTHS = Set(initialize=["January", "February", "March"])
+
+    # Decision variables
+    model.x = Var(model.SUPPLIERS, model.MONTHS, domain=NonNegativeReals)
+
+    # Parameters
+    available = suppliers_df.iloc[:, 6].tolist()
+    brix_acid = suppliers_df.iloc[:, 7].tolist()
+    acid = suppliers_df.iloc[:, 8].tolist()
+    astringency = suppliers_df.iloc[:, 9].tolist()
+    color = suppliers_df.iloc[:, 10].tolist()
+    price = suppliers_df.iloc[:, 11].tolist()
+    shipping = suppliers_df.iloc[:, 12].tolist()
+
+    print(available, "\n", "Series:", "\n", suppliers_df.iloc[:, 6].tolist())
+
+    # Objective function
+    cost = 0
+    for s in model.SUPPLIERS:
+        for m in model.MONTHS:
+            idx = s - list(model.SUPPLIERS)[0]  # Get the index of the supplier
+            cost += model.x[s, m] * (price[idx] + shipping[idx])
+    model.OBJ = Objective(expr=cost, sense=minimize)
+
+    '''
+    Here’s the next step in your Pyomo workflow, without diving into code yet:
+
+Define constraints – after the objective, the solver needs rules to follow. Examples:
+Supply limits per supplier.
+Demand requirements per month.
+Capacity, budget, or any other real-world restrictions.
+Choose a solver – Pyomo doesn’t solve the model by itself. You pick one (like glpk, cbc, gurobi) and make sure it’s installed.
+Solve the model – you call the solver on your model and Pyomo calculates the optimal values for your decision variables (model.x[s, m]).
+Check the results – look at:
+Objective value (model.OBJ())
+Decision variable values (model.x[s, m].value)
+Post-processing / analysis – interpret results, maybe export to Excel or plot.
+
+So basically: constraints → solver → solve → check → analyze.
+    '''
+            
+
+          
+
+
+
+suppliers = load_supplier_data(df)
+demand, Valencia_req, quality = load_demand_and_quality_constraints(df)
+
+
+build_basic_model(suppliers, demand, Valencia_req, quality)
