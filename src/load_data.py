@@ -9,7 +9,6 @@ DATA = p.resolve().parents[1] / "data" / "OrangeJuiceBlending.xlsx"
 
 df = pd.read_excel(DATA, sheet_name="Optimization Model (Limit 4)", header=None)
 
-
 def load_supplier_data(df):
     # Find the row where the supplier data starts
     supplier_headers = df.index[df.iloc[:, 0] == "Varietal"][0]
@@ -65,13 +64,13 @@ def build_basic_model(suppliers_df, demand, Valencia_req, quality):
 
     # Parameters
     available = suppliers_df.iloc[:, 6].tolist()
-    print(available)
     brix_acid = suppliers_df.iloc[:, 7].tolist()
     acid = suppliers_df.iloc[:, 8].tolist()
     astringency = suppliers_df.iloc[:, 9].tolist()
     color = suppliers_df.iloc[:, 10].tolist()
     price = suppliers_df.iloc[:, 11].tolist()
     shipping = suppliers_df.iloc[:, 12].tolist()
+
     
     # Objective function
     cost = 0
@@ -84,6 +83,7 @@ def build_basic_model(suppliers_df, demand, Valencia_req, quality):
     # Constraints
     ## Supply constraints
     ### Each month must meet a specific demand
+
     # demand_jan = 0
     # demand_feb = 0
     # demand_mar = 0
@@ -100,31 +100,38 @@ def build_basic_model(suppliers_df, demand, Valencia_req, quality):
     # model.Demand_Mar = Constraint(expr=demand_mar >= demand["March"])
 
     # Alternative way to write demand constraints with summation and generators
-    model.Demand_Jan_Alt = Constraint(expr=sum(model.x[s, "January"] for s in model.SUPPLIERS) >= demand["January"])
-    model.Demand_Feb_Alt = Constraint(expr=sum(model.x[s, "February"] for s in model.SUPPLIERS) >= demand["February"])
-    model.Demand_Mar_Alt = Constraint(expr=sum(model.x[s, "March"] for s in model.SUPPLIERS) >= demand["March"])
+    # model.Demand_Jan_Alt = Constraint(expr=sum(model.x[s, "January"] for s in model.SUPPLIERS) >= demand["January"])
+    # model.Demand_Feb_Alt = Constraint(expr=sum(model.x[s, "February"] for s in model.SUPPLIERS) >= demand["February"])
+    # model.Demand_Mar_Alt = Constraint(expr=sum(model.x[s, "March"] for s in model.SUPPLIERS) >= demand["March"])
 
     # Constraints written with rules and functions
-    ## Each month must meet a specific demand
+    ### Each month must meet a specific demand. Final
     def demand_function(model, m):
         return sum(model.x[s, m] for s in model.SUPPLIERS) == demand[m]
     model.demand_constraint = Constraint(model.MONTHS, rule=demand_function)
 
-    ## Valencia content constraints. Valencia orders for each month must make up at least 40% of the total blend.
+    ### Each supplier has a maximum available quantity that cannot be exceeded
+    def available_constraint(model, s):
+        idx = s - list(model.SUPPLIERS)[0]
+        return sum(model.x[s, m] for m in model.MONTHS) <= available[idx]
+    model.Available_constraint = Constraint(model.SUPPLIERS, rule=available_constraint)
+
+    ### Valencia content constraints. Valencia orders for each month must make up at least 40% of the total blend.
     def valencia_constraint(model, m):
         # Supplier at row 7 is Valencia
         return model.x[7, m] >= Valencia_req[m]
     model.Valencia_constraint = Constraint(model.MONTHS, rule=valencia_constraint)
 
     ## Quality constraints
-    jan_brix_acid = 0
-    for s in model.SUPPLIERS:
-        for m in model.MONTHS:
-            idx = s - list(model.SUPPLIERS)[0]
-            jan_brix_acid += model.x[s, m] * suppliers_df.iloc[idx, 7] 
-    jan_brix_acid_ratio = jan_brix_acid / demand["January"]
-    model.Jan_Brix_Min = Constraint(expr=jan_brix_acid_ratio >= quality["BAR"][0])
-    model.Jan_Brix_Max = Constraint(expr=jan_brix_acid_ratio <= quality["BAR"][1])
+    ### Draft for January Brix/Acid ratio constraint
+    # jan_brix_acid = 0
+    # for s in model.SUPPLIERS:
+    #     for m in model.MONTHS:
+    #         idx = s - list(model.SUPPLIERS)[0]
+    #         jan_brix_acid += model.x[s, m] * suppliers_df.iloc[idx, 7] 
+    # jan_brix_acid_ratio = jan_brix_acid / demand["January"]
+    # model.Jan_Brix_Min = Constraint(expr=jan_brix_acid_ratio >= quality["BAR"][0])
+    # model.Jan_Brix_Max = Constraint(expr=jan_brix_acid_ratio <= quality["BAR"][1])
 
     # Suboptimal way to define constraints for all quality parameters and months using loops and if statements
     # def brix(model, m):
@@ -153,7 +160,37 @@ def build_basic_model(suppliers_df, demand, Valencia_req, quality):
         
     model.Quality_Constraint = Constraint(model.MONTHS, ["BAR", "ACID", "ASTRINGENCY", "COLOR"], rule=quality_constraint)
 
+    return model
+
+# Creating the four args to build the basic model
 suppliers = load_supplier_data(df)
 demand, Valencia_req, quality = load_demand_and_quality_constraints(df)
+# Build the basic model
+model = build_basic_model(suppliers, demand, Valencia_req, quality)
+# Get the solver and solve the model
+# Pass the model to the solver
+solver = SolverFactory("glpk")
+results = solver.solve(model)
 
-build_basic_model(suppliers, demand, Valencia_req, quality)
+# print(solver.available())
+
+# Check solver status
+if (results.solver.status == 'ok') and \
+   (results.solver.termination_condition == TerminationCondition.optimal):
+    print("✅ Optimal solution found")
+elif results.solver.termination_condition == TerminationCondition.infeasible:
+    print("⚠️ Model is infeasible")
+elif results.solver.termination_condition == TerminationCondition.unbounded:
+    print("⚠️ Model is unbounded")
+else:
+    print("⚠️ Solver did not succeed")
+    print("Status:", results.solver.status)
+    print("Termination:", results.solver.termination_condition)
+
+# Extract solution if available
+if results.solver.termination_condition == TerminationCondition.optimal:
+    for s in model.SUPPLIERS:
+        for m in model.MONTHS:
+            print(f"{s}, {m}: {model.x[s, m].value}")
+    print("Total Cost:", model.OBJ())
+
